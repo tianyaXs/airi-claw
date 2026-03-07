@@ -1,0 +1,20 @@
+{
+  "name": "airi-claw",
+  "version": "1.0.0",
+  "description": "轻量级 AIRI 虚拟形象 + OpenClaw 集成",
+  
+  "openclaw": {
+    "url": "ws://127.0.0.1:18789",
+    "token": "",
+    "agent": "main"
+  },
+  
+  "live2d": {
+    "modelPath": "/assets/live2d/models/hiyori/Hiyori.model3.json"
+  },
+  
+  "window": {
+    "width": 400,
+    "height": 700
+  }
+}
