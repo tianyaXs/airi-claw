@@ -169,7 +169,35 @@ airi-claw/
 
 ## 常见问题
 
-### Q: 连接失败
+### Q: 连接失败 - "pairing required" 错误
+
+如果看到 `pairing required` 或 `NOT_PAIRED` 错误，说明设备需要与 Gateway 进行配对。
+
+**配对流程：**
+
+1. **首次连接时**，Gateway 会返回配对请求 ID
+2. **在终端批准配对**：
+   ```bash
+   # 查看待批准的配对请求
+   openclaw devices list
+
+   # 批准指定请求
+   openclaw devices approve <requestId>
+   ```
+
+3. **重新启动 AIRI Claw** 应用
+
+**为什么会出现配对？**
+
+- 这是 OpenClaw 的安全机制，每个新设备都需要显式批准
+- 设备身份基于 Ed25519 密钥对，存储在浏览器 localStorage
+- 清除浏览器数据后需要重新配对
+
+**自动配对（本地连接）：**
+
+如果是本地连接（localhost），某些版本的 Gateway 会自动批准配对。如果不是，请手动执行上述步骤。
+
+### Q: 连接失败 - 其他原因
 确保 OpenClaw Gateway 已启动：
 ```bash
 openclaw gateway start

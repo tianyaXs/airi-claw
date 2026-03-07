@@ -8,6 +8,12 @@ export interface OpenClawMessage {
   streaming?: boolean
 }
 
+export interface PairingRequest {
+  requestId: string
+  deviceId: string
+  reason: string
+}
+
 export interface OpenClawConfig {
   url: string
   token?: string
@@ -83,9 +89,9 @@ export class OpenClawClient extends SimpleEventEmitter {
   private maxReconnectAttempts = 5
   private currentMessageId: string | null = null
   private messageBuffer = ''
-  private deviceId: string
-  private privateKey: Uint8Array | null = null
-  private publicKey: Uint8Array | null = null
+  private deviceId: string = ''
+  private privateKey: Uint8Array
+  private publicKey: Uint8Array
   private serverNonce: string | null = null
   private pendingConnectId: string | null = null
   private connectResolve: (() => void) | null = null
@@ -100,23 +106,40 @@ export class OpenClawClient extends SimpleEventEmitter {
       autoReconnect: config.autoReconnect !== false,
       reconnectInterval: config.reconnectInterval || 3000,
     }
-    this.deviceId = this.getOrCreateDeviceId()
+    // 获取或创建设备密钥对（持久化）
+    const keys = this.getOrCreateDeviceKeys()
+    this.privateKey = keys.privateKey
+    this.publicKey = keys.publicKey
   }
 
-  private getOrCreateDeviceId(): string {
-    const storageKey = 'airi_claw_device_id'
-    let deviceId = localStorage.getItem(storageKey)
-    if (!deviceId) {
-      deviceId = `airi_claw_${Math.random().toString(36).substr(2, 9)}_${Date.now()}`
-      localStorage.setItem(storageKey, deviceId)
+  // 从 localStorage 获取或创建设备密钥对
+  private getOrCreateDeviceKeys(): { privateKey: Uint8Array; publicKey: Uint8Array } {
+    const storageKey = 'airi_claw_device_keys'
+    const stored = localStorage.getItem(storageKey)
+    
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored)
+        return {
+          privateKey: base64UrlDecode(parsed.privateKey),
+          publicKey: base64UrlDecode(parsed.publicKey)
+        }
+      } catch (err) {
+        console.warn('[OpenClaw] Failed to parse stored device keys, generating new ones')
+      }
     }
-    return deviceId
-  }
-
-  private generateKeyPair(): { privateKey: Uint8Array; publicKey: Uint8Array } {
-    // 生成 Ed25519 密钥对
+    
+    // 生成新的 Ed25519 密钥对
     const keyPair = nacl.sign.keyPair()
-    return { privateKey: keyPair.secretKey, publicKey: keyPair.publicKey }
+    const keys = { privateKey: keyPair.secretKey, publicKey: keyPair.publicKey }
+    
+    // 持久化到 localStorage
+    localStorage.setItem(storageKey, JSON.stringify({
+      privateKey: base64UrlEncode(keys.privateKey),
+      publicKey: base64UrlEncode(keys.publicKey)
+    }))
+    
+    return keys
   }
 
   private async computeFingerprint(publicKeyRaw: Uint8Array): Promise<string> {
@@ -181,15 +204,12 @@ export class OpenClawClient extends SimpleEventEmitter {
         this.serverNonce = msg.payload?.nonce
         
         try {
-          // 生成 Ed25519 密钥对
-          const keyPair = this.generateKeyPair()
-          this.privateKey = keyPair.privateKey
-          this.publicKey = keyPair.publicKey
-          
+          // 使用持久化的 Ed25519 密钥对
           const publicKeyBase64Url = base64UrlEncode(this.publicKey)
           
           // 计算 deviceId (公钥 fingerprint)
           const deviceId = await this.computeFingerprint(this.publicKey)
+          this.deviceId = deviceId
           console.log('[OpenClaw] Device fingerprint:', deviceId)
           
           // v2 签名 payload (OpenClaw 只支持 v1/v2，不支持 v3)
@@ -270,7 +290,21 @@ export class OpenClawClient extends SimpleEventEmitter {
           this.connectResolve?.()
         } else {
           console.error('[OpenClaw] Handshake failed:', msg.error)
-          this.connectReject?.(new Error(msg.error?.message || 'Handshake failed'))
+          // 处理配对错误
+          if (msg.error?.code === 'NOT_PAIRED') {
+            const requestId = msg.error?.details?.requestId
+            const reason = msg.error?.details?.reason || 'not-paired'
+            this.emit('pairingRequired', {
+              requestId,
+              deviceId: this.deviceId,
+              reason,
+            } as PairingRequest)
+            // 停止自动重连
+            this.config.autoReconnect = false
+            this.connectReject?.(new Error(`设备需要配对，请在终端运行: openclaw devices approve ${requestId}`))
+          } else {
+            this.connectReject?.(new Error(msg.error?.message || 'Handshake failed'))
+          }
         }
         this.connectResolve = null
         this.connectReject = null
@@ -467,9 +501,9 @@ export class OpenClawClient extends SimpleEventEmitter {
 
     this.isConnected = false
     this.messageQueue = []
-    this.privateKey = null
-    this.publicKey = null
+    // 注意：privateKey 和 publicKey 现在是持久化的，不在这里清除
     this.pendingConnectId = null
+    this.connectResolve = null
     this.connectResolve = null
     this.connectReject = null
   }

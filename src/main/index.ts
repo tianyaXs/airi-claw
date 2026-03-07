@@ -38,6 +38,22 @@ async function createWindow() {
     },
   })
 
+  // 设置 CSP 响应头（开发模式允许 unsafe-eval）
+  window.webContents.session.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        'Content-Security-Policy': [
+          "default-src 'self' 'unsafe-inline' 'unsafe-eval'; " +
+          "script-src 'self' 'unsafe-inline' 'unsafe-eval'; " +
+          "style-src 'self' 'unsafe-inline'; " +
+          "img-src 'self' data: blob:; " +
+          "connect-src 'self' ws://127.0.0.1:18789 ws://localhost:18789 http://localhost:5173;"
+        ]
+      }
+    })
+  })
+
   // IPC 处理
   ipcMain.handle('window:minimize', () => window.minimize())
   ipcMain.handle('window:close', () => window.close())

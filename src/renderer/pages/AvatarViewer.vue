@@ -212,7 +212,28 @@ async function initOpenClaw() {
     connectionStatus.value = 'disconnected'
   })
   
-  openclawClient.on('message', (message: { role: string, content: string }) => {
+  openclawClient.on('pairingRequired', (request: { requestId: string; deviceId: string; reason: string }) => {
+    console.log('[OpenClaw] Pairing required:', request)
+    connectionStatus.value = 'disconnected'
+    
+    // 在控制台醒目地打印配对命令
+    console.log('%c========================================', 'color: #667eea; font-size: 14px; font-weight: bold;')
+    console.log('%c设备需要配对，请复制以下命令到终端运行：', 'color: #667eea; font-size: 14px; font-weight: bold;')
+    console.log('%copenclaw devices approve ' + request.requestId, 'color: #4caf50; font-size: 16px; font-weight: bold; background: #f0f0f0; padding: 8px; border-radius: 4px;')
+    console.log('%c========================================', 'color: #667eea; font-size: 14px; font-weight: bold;')
+    
+    // 以人物对话形式显示配对提示，命令放在最前面方便复制
+    const command = `openclaw devices approve ${request.requestId}`
+    const pairingMessage = `初次见面！请帮我绑定设备~
+
+${command}
+
+复制上面的命令到终端运行，我就能为您服务啦！✨`
+    
+    showMessage(pairingMessage)
+  })
+  
+  openclawClient.on('message', (message: { role: string; content: string }) => {
     chatHistory.value.push({
       role: message.role,
       content: message.content,
@@ -243,13 +264,15 @@ async function initOpenClaw() {
 
 function showMessage(content: string) {
   isSpeaking.value = true
-  currentMessage.value = content
+  // 截断过长的消息，保留前200字符
+  currentMessage.value = content.length > 200 ? content.slice(0, 200) + '...' : content
   
   if (messageTimeout) {
     clearTimeout(messageTimeout)
   }
   
-  const displayTime = Math.min(Math.max(content.length * 100, 4000), 12000)
+  // 根据消息长度计算显示时间：每50ms一个字符，最少4000ms，最多15000ms
+  const displayTime = Math.min(Math.max(content.length * 50, 4000), 15000)
   
   messageTimeout = setTimeout(() => {
     isSpeaking.value = false
@@ -488,11 +511,13 @@ onUnmounted(() => {
   left: 50%;
   transform: translateX(-50%);
   max-width: 280px;
+  max-height: 200px;
   background: rgba(255, 255, 255, 0.95);
   border-radius: 16px;
   padding: 14px 18px;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
   z-index: 50;
+  overflow: hidden;
 }
 
 .bubble-content {
@@ -500,6 +525,25 @@ onUnmounted(() => {
   font-size: 14px;
   line-height: 1.5;
   word-wrap: break-word;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 170px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+/* 气泡内容滚动条 */
+.bubble-content::-webkit-scrollbar {
+  width: 4px;
+}
+
+.bubble-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.bubble-content::-webkit-scrollbar-thumb {
+  background: rgba(139, 115, 85, 0.3);
+  border-radius: 2px;
 }
 
 .bubble-arrow {

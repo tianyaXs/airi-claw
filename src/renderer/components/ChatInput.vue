@@ -102,6 +102,32 @@ function formatTime(timestamp: number): string {
   const date = new Date(timestamp)
   return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
 }
+
+// 展开/收起长消息
+const expandedItems = ref<Set<number>>(new Set())
+
+function toggleExpand(index: number) {
+  if (expandedItems.value.has(index)) {
+    expandedItems.value.delete(index)
+  } else {
+    expandedItems.value.add(index)
+  }
+}
+
+function isExpanded(index: number): boolean {
+  return expandedItems.value.has(index)
+}
+
+const MAX_MESSAGE_LENGTH = 120 // 最大显示字符数
+
+function shouldTruncate(content: string): boolean {
+  return content.length > MAX_MESSAGE_LENGTH
+}
+
+function truncateContent(content: string): string {
+  if (content.length <= MAX_MESSAGE_LENGTH) return content
+  return content.slice(0, MAX_MESSAGE_LENGTH) + '...'
+}
 </script>
 
 <template>
@@ -236,13 +262,24 @@ function formatTime(timestamp: number): string {
                 v-for="(msg, index) in paginatedHistory" 
                 :key="index"
                 class="history-item"
-                :class="msg.role"
+                :class="[msg.role, { expanded: isExpanded(index) }]"
               >
                 <div class="item-header">
                   <span class="avatar">{{ msg.role === 'user' ? '😊' : '🤖' }}</span>
                   <span class="time">{{ formatTime(msg.timestamp) }}</span>
                 </div>
-                <div class="item-text">{{ msg.content }}</div>
+                <div class="item-text-wrapper">
+                  <div class="item-text" :class="{ truncated: !isExpanded(index) && shouldTruncate(msg.content) }">
+                    {{ isExpanded(index) ? msg.content : truncateContent(msg.content) }}
+                  </div>
+                  <button 
+                    v-if="shouldTruncate(msg.content)" 
+                    class="expand-btn"
+                    @click="toggleExpand(index)"
+                  >
+                    {{ isExpanded(index) ? '收起' : '展开' }}
+                  </button>
+                </div>
               </div>
               
               <div v-if="chatHistory.length === 0" class="empty-history">
@@ -984,12 +1021,51 @@ function formatTime(timestamp: number): string {
   color: #bbb;
 }
 
+.item-text-wrapper {
+  padding-left: 20px;
+}
+
 .item-text {
   font-size: 13px;
   color: #4a4a4a;
-  line-height: 1.5;
+  line-height: 1.6;
   word-wrap: break-word;
-  padding-left: 20px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.item-text.truncated {
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.expand-btn {
+  margin-top: 6px;
+  padding: 2px 10px;
+  font-size: 11px;
+  color: #667eea;
+  background: transparent;
+  border: 1px solid #667eea;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.expand-btn:hover {
+  background: #667eea;
+  color: white;
+}
+
+.history-item {
+  margin-bottom: 12px;
+  padding: 8px 0;
+  border-bottom: 1px dashed #f0ece0;
+}
+
+.history-item:last-child {
+  border-bottom: none;
 }
 
 .empty-history {
