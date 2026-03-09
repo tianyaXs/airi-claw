@@ -299,8 +299,7 @@ export class OpenClawClient extends SimpleEventEmitter {
               deviceId: this.deviceId,
               reason,
             } as PairingRequest)
-            // 停止自动重连
-            this.config.autoReconnect = false
+            // 配对失败时停止自动重连，但下次手动发送消息时会重新尝试
             this.connectReject?.(new Error(`设备需要配对，请在终端运行: openclaw devices approve ${requestId}`))
           } else {
             this.connectReject?.(new Error(msg.error?.message || 'Handshake failed'))
@@ -428,6 +427,24 @@ export class OpenClawClient extends SimpleEventEmitter {
   }
 
   async sendMessage(content: string): Promise<void> {
+    // 如果未连接，先尝试重连
+    if (!this.isConnected) {
+      console.log('[OpenClaw] Not connected, attempting to reconnect before sending...')
+      // 临时启用自动重连（之前可能因为配对失败被禁用）
+      const originalAutoReconnect = this.config.autoReconnect
+      this.config.autoReconnect = true
+      try {
+        await this.connect()
+        console.log('[OpenClaw] Reconnected successfully')
+      } catch (err) {
+        console.error('[OpenClaw] Failed to reconnect:', err)
+        // 如果还是配对错误，恢复原设置
+        this.config.autoReconnect = originalAutoReconnect
+        // 重连失败，提示用户可能需要配对
+        throw new Error('连接失败，请确保 OpenClaw Gateway 已启动并且设备已配对')
+      }
+    }
+
     const request = {
       type: 'req',
       id: this.generateId(),
@@ -437,12 +454,6 @@ export class OpenClawClient extends SimpleEventEmitter {
         agentId: this.config.agent,
         idempotencyKey: `idem_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
       },
-    }
-
-    if (!this.isConnected) {
-      console.log('[OpenClaw] Queueing message (not connected)')
-      this.messageQueue.push(request)
-      return
     }
 
     console.log('[OpenClaw] Sending message:', request)

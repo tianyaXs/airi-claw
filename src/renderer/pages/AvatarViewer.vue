@@ -289,15 +289,20 @@ async function handleSendMessage(content: string) {
     timestamp: Date.now()
   })
   
-  if (openclawClient?.isReady()) {
+  if (openclawClient) {
     try {
       await openclawClient.sendMessage(content.trim())
-    } catch (err) {
+    } catch (err: any) {
       console.error('[OpenClaw] Failed to send message:', err)
-      showMessage('发送消息失败')
+      // 检查是否是配对错误
+      if (err.message?.includes('pairing') || err.message?.includes('配对')) {
+        showMessage('连接失败，请检查设备是否已配对~')
+      } else {
+        showMessage('发送消息失败，请重试~')
+      }
     }
   } else {
-    showMessage('未连接到 OpenClaw Gateway')
+    showMessage('客户端未初始化，请重启应用~')
   }
 }
 
