@@ -10,6 +10,13 @@
     "systemPrompt": ""
   },
   
+  "tts": {
+    "apiKey": "",
+    "endpoint": "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
+    "voice": "longxiaochun",
+    "enabled": false
+  },
+  
   "live2d": {
     "modelPath": "/assets/live2d/models/hiyori/Hiyori.model3.json"
   },

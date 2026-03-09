@@ -47,8 +47,9 @@ async function createWindow() {
           "default-src 'self' 'unsafe-inline' 'unsafe-eval'; " +
           "script-src 'self' 'unsafe-inline' 'unsafe-eval'; " +
           "style-src 'self' 'unsafe-inline'; " +
-          "img-src 'self' data: blob:; " +
-          "connect-src 'self' ws://127.0.0.1:18789 ws://localhost:18789 http://localhost:5173;"
+          "img-src 'self' data: blob: https://* http://*.aliyuncs.com; " +
+          "media-src 'self' blob: https://* http://*.aliyuncs.com; " +
+          "connect-src 'self' ws://127.0.0.1:18789 ws://localhost:18789 http://localhost:5173 https://dashscope.aliyuncs.com https://*.aliyuncs.com http://*.aliyuncs.com;"
         ]
       }
     })
@@ -64,6 +65,44 @@ async function createWindow() {
   ipcMain.handle('window:set-position', (_event, x: number, y: number) => {
     if (typeof x === 'number' && typeof y === 'number' && !isNaN(x) && !isNaN(y)) {
       window.setPosition(Math.round(x), Math.round(y))
+    }
+  })
+
+  // TTS 语音合成
+  ipcMain.handle('tts:synthesize', async (_event, text: string, apiKey: string, endpoint: string, voice: string) => {
+    try {
+      console.log('[TTS] 主进程合成请求:', text.substring(0, 50))
+      
+      // 清理文本
+      const cleanText = text.replace(/[\ud800-\udfff]/g, '').trim()
+      
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: 'qwen3-tts-flash',
+          input: {
+            text: cleanText,
+            voice: voice || 'Cherry',
+            language_type: 'Chinese',
+          },
+        }),
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        throw new Error(`TTS 请求失败: ${response.status} ${errorText}`)
+      }
+
+      const data = await response.json()
+      console.log('[TTS] 主进程合成成功')
+      return { success: true, data }
+    } catch (error: any) {
+      console.error('[TTS] 主进程合成失败:', error)
+      return { success: false, error: error.message }
     }
   })
 

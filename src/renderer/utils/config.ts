@@ -11,6 +11,12 @@ export interface AppConfig {
     systemPrompt?: string
     thinking?: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
   }
+  tts?: {
+    apiKey?: string
+    endpoint?: string
+    voice?: string
+    enabled?: boolean
+  }
   live2d: {
     modelPath: string
   }
@@ -66,6 +72,20 @@ async function loadConfig(): Promise<AppConfig> {
   if (envAgent) config.openclaw.agent = envAgent
   if (envSystemPrompt) config.openclaw.systemPrompt = envSystemPrompt
   if (envThinking) config.openclaw.thinking = envThinking as any
+  
+  // TTS 配置
+  const envTtsApiKey = getEnvValue('VITE_TTS_API_KEY')
+  const envTtsEndpoint = getEnvValue('VITE_TTS_ENDPOINT')
+  const envTtsVoice = getEnvValue('VITE_TTS_VOICE')
+  
+  if (envTtsApiKey || envTtsEndpoint || envTtsVoice) {
+    config.tts = {
+      ...config.tts,
+      ...(envTtsApiKey && { apiKey: envTtsApiKey }),
+      ...(envTtsEndpoint && { endpoint: envTtsEndpoint }),
+      ...(envTtsVoice && { voice: envTtsVoice }),
+    }
+  }
   
   return config
 }

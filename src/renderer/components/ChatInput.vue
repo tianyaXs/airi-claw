@@ -1,11 +1,24 @@
 <script setup lang="ts">import { ref, nextTick, computed } from 'vue'
 
+const props = defineProps<{
+  ttsEnabled?: boolean
+}>()
+
 const emit = defineEmits<{
   (e: 'send', message: string): void
   (e: 'clear'): void
   (e: 'minimize'): void
   (e: 'close'): void
+  (e: 'tts-toggle', enabled: boolean): void
+  (e: 'update:ttsEnabled', enabled: boolean): void
 }>()
+
+function toggleTTS() {
+  const newValue = !props.ttsEnabled
+  console.log('[ChatInput] TTS 切换, 当前:', props.ttsEnabled, '新值:', newValue)
+  emit('update:ttsEnabled', newValue)
+  emit('tts-toggle', newValue)
+}
 
 const message = ref('')
 const isComposing = ref(false)
@@ -203,6 +216,19 @@ function truncateContent(content: string): string {
           <div class="frame-stand"></div>
         </div>
         <div class="frame-menu">
+          <button 
+            class="menu-btn tts" 
+            :class="{ active: props.ttsEnabled }"
+            @click.stop="toggleTTS" 
+            :title="props.ttsEnabled ? '关闭语音朗读' : '开启语音朗读'"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M11 5L6 9H2v6h4l5 4V5z"/>
+              <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07" v-if="props.ttsEnabled"/>
+              <line x1="23" y1="9" x2="17" y2="15" v-if="!props.ttsEnabled"/>
+              <line x1="17" y1="9" x2="23" y2="15" v-if="!props.ttsEnabled"/>
+            </svg>
+          </button>
           <button class="menu-btn minimize" @click.stop="handleMinimize" title="最小化">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M20 12H4"/>
@@ -797,6 +823,16 @@ function truncateContent(content: string): string {
 .menu-btn.close:hover {
   background: rgba(255, 107, 107, 0.3);
   color: #ff6b6b;
+}
+
+.menu-btn.tts:hover {
+  background: rgba(102, 126, 234, 0.3);
+  color: #667eea;
+}
+
+.menu-btn.tts.active {
+  background: rgba(102, 126, 234, 0.5);
+  color: #fff;
 }
 
 .menu-btn svg {

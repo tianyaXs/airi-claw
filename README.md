@@ -184,6 +184,43 @@ airi-claw/
 - **pixi-live2d-display** - Live2D 渲染
 - **tweetnacl** - Ed25519 加密签名
 
+## TTS (语音合成)
+
+支持阿里云百炼 COSYVOICE 语音合成，AI 回复可以自动朗读。
+
+### 配置 TTS
+
+1. **获取阿里云百炼 API Key**：[https://bailian.console.aliyun.com/](https://bailian.console.aliyun.com/)
+
+2. **配置环境变量**（`.env` 文件）：
+   ```env
+   VITE_TTS_API_KEY=your_api_key_here
+   VITE_TTS_VOICE=longxiaochun
+   ```
+
+3. **或配置 config.json**：
+   ```json
+   {
+     "tts": {
+       "apiKey": "your_api_key_here",
+       "voice": "longxiaochun"
+     }
+   }
+   ```
+
+### 使用 TTS
+
+- 鼠标悬停在桌面**相框**上会显示控制菜单
+- 点击**喇叭图标**开启/关闭语音朗读
+- 图标高亮表示 TTS 已开启
+
+### 可用音色
+
+- `longxiaochun` - 温柔女声（默认）
+- `longxiaoxia` - 活泼女声
+- `longxiaocheng` - 成熟女声
+- `longxiaobai` - 清脆女声
+
 ## 致谢
 
 本项目 Live2D 渲染实现参考了以下开源项目：

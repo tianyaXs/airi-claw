@@ -7,6 +7,7 @@ import { Live2DModel } from 'pixi-live2d-display/cubism4'
 import { OpenClawClient } from '../services/openclaw'
 import ChatInput from '../components/ChatInput.vue'
 import { loadConfig, getConfig } from '../utils/config'
+import { initTTS, getTTS } from '../services/tts'
 
 const canvasContainerRef = ref<HTMLDivElement>()
 const isLoading = ref(true)
@@ -15,6 +16,7 @@ const connectionStatus = ref<'connecting' | 'connected' | 'disconnected'>('disco
 const isSpeaking = ref(false)
 const currentMessage = ref('')
 const chatHistory = ref<Array<{ role: string; content: string; timestamp: number }>>([])
+const ttsEnabled = ref(false)
 
 let pixiApp: Application | null = null
 
@@ -269,6 +271,16 @@ function showMessage(content: string) {
   // 截断过长的消息，保留前200字符
   currentMessage.value = content.length > 200 ? content.slice(0, 200) + '...' : content
   
+  // 播放 TTS
+  const tts = getTTS()
+  console.log('[TTS] showMessage 调用, tts实例:', !!tts, 'ttsEnabled:', tts?.isEnabled())
+  if (tts?.isEnabled()) {
+    console.log('[TTS] 开始朗读:', content.substring(0, 30) + '...')
+    tts.speak(content)
+  } else {
+    console.log('[TTS] 跳过朗读: TTS未启用')
+  }
+  
   if (messageTimeout) {
     clearTimeout(messageTimeout)
   }
@@ -298,13 +310,21 @@ async function handleSendMessage(content: string) {
       console.error('[OpenClaw] Failed to send message:', err)
       // 检查是否是配对错误
       if (err.message?.includes('pairing') || err.message?.includes('配对')) {
-        showMessage('连接失败，请检查设备是否已配对~')
+        showMessage('连接失败，请检查设备已配对~')
       } else {
         showMessage('发送消息失败，请重试~')
       }
     }
   } else {
     showMessage('客户端未初始化，请重启应用~')
+  }
+}
+
+function handleTTSToggle(enabled: boolean) {
+  console.log('[TTS] 语音朗读:', enabled ? '开启' : '关闭')
+  const tts = getTTS()
+  if (tts) {
+    tts.setEnabled(enabled)
   }
 }
 
@@ -336,6 +356,16 @@ function cleanup() {
 
 onMounted(async () => {
   await loadConfig()
+
+  // 初始化 TTS
+  const config = getConfig()
+  initTTS({
+    apiKey: config.tts?.apiKey || '',
+    endpoint: config.tts?.endpoint,
+    voice: config.tts?.voice,
+    enabled: false, // 默认关闭
+  })
+
   setTimeout(() => {
     initLive2D()
     initOpenClaw()
@@ -400,12 +430,15 @@ onUnmounted(() => {
     
     <!-- 底部输入区（包含书本） -->
     <div class="input-area">
-      <ChatInput 
-        v-model:chatHistory="chatHistory" 
-        @send="handleSendMessage" 
+        <ChatInput 
+        v-model:chatHistory="chatHistory"
+        :ttsEnabled="ttsEnabled"
+        @update:ttsEnabled="ttsEnabled = $event"
+        @send="handleSendMessage"
         @clear="chatHistory = []"
         @minimize="handleMinimize"
         @close="handleClose"
+        @tts-toggle="handleTTSToggle"
       />
     </div>
   </div>
