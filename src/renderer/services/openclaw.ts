@@ -20,6 +20,8 @@ export interface OpenClawConfig {
   agent?: string
   autoReconnect?: boolean
   reconnectInterval?: number
+  systemPrompt?: string  // 额外的系统提示词
+  thinking?: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'  // 思考级别，默认 xhigh
 }
 
 type EventCallback = (...args: any[]) => void
@@ -81,7 +83,7 @@ function base64UrlDecode(input: string): Uint8Array {
 
 export class OpenClawClient extends SimpleEventEmitter {
   private ws: WebSocket | null = null
-  private config: Required<OpenClawConfig>
+  private config: OpenClawConfig & { url: string; token: string; agent: string; autoReconnect: boolean; reconnectInterval: number; systemPrompt: string }
   private messageQueue: any[] = []
   private isConnected = false
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
@@ -105,6 +107,8 @@ export class OpenClawClient extends SimpleEventEmitter {
       agent: config.agent || 'main',
       autoReconnect: config.autoReconnect !== false,
       reconnectInterval: config.reconnectInterval || 3000,
+      systemPrompt: config.systemPrompt || '',
+      thinking: config.thinking,
     }
     // 获取或创建设备密钥对（持久化）
     const keys = this.getOrCreateDeviceKeys()
@@ -311,12 +315,12 @@ export class OpenClawClient extends SimpleEventEmitter {
       }
 
       if (msg.type === 'res') {
-        console.log('[OpenClaw] Received response:', msg.method || 'unknown', 'ok:', msg.ok)
+        console.log('[OpenClaw] Received response:', msg.method || 'unknown', 'ok:', msg.ok, 'id:', msg.id)
         if (msg.id === this.currentMessageId) {
           if (msg.ok) {
             console.log('[OpenClaw] Message sent successfully')
           } else {
-            console.error('[OpenClaw] Message failed:', msg.error)
+            console.error('[OpenClaw] Message failed:', JSON.stringify(msg.error, null, 2))
           }
           this.currentMessageId = null
         }
@@ -353,11 +357,19 @@ export class OpenClawClient extends SimpleEventEmitter {
 
       case 'agent.chunk':
         if (event.payload?.chunk) {
-          this.messageBuffer += event.payload.chunk
+          const chunk = event.payload.chunk
+          const isThinking = event.payload.type === 'thinking' || chunk.startsWith('<think>')
+          
+          if (isThinking) {
+            console.log('[OpenClaw] Thinking chunk:', chunk.substring(0, 100))
+          }
+          
+          this.messageBuffer += chunk
           this.emit('chunk', {
-            content: event.payload.chunk,
+            content: chunk,
             fullContent: this.messageBuffer,
             streaming: true,
+            isThinking,
           })
         }
         break
@@ -445,15 +457,30 @@ export class OpenClawClient extends SimpleEventEmitter {
       }
     }
 
+    // 构建请求参数
+    const params: any = {
+      message: content,
+      agentId: this.config.agent,
+      idempotencyKey: `idem_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+    }
+
+    // 如果有系统提示词，添加到请求中
+    if (this.config.systemPrompt) {
+      params.extraSystemPrompt = this.config.systemPrompt
+      console.log('[OpenClaw] Using extra system prompt:', this.config.systemPrompt.substring(0, 50) + '...')
+    }
+
+    // 添加思考级别
+    if (this.config.thinking) {
+      params.thinking = this.config.thinking
+      console.log('[OpenClaw] Using thinking level:', this.config.thinking)
+    }
+
     const request = {
       type: 'req',
       id: this.generateId(),
       method: 'agent',
-      params: {
-        message: content,
-        agentId: this.config.agent,
-        idempotencyKey: `idem_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-      },
+      params,
     }
 
     console.log('[OpenClaw] Sending message:', request)

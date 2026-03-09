@@ -8,6 +8,8 @@ export interface AppConfig {
     url: string
     token: string
     agent: string
+    systemPrompt?: string
+    thinking?: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
   }
   live2d: {
     modelPath: string
@@ -56,10 +58,14 @@ async function loadConfig(): Promise<AppConfig> {
   const envUrl = getEnvValue('VITE_OPENCLAW_URL')
   const envToken = getEnvValue('VITE_OPENCLAW_TOKEN')
   const envAgent = getEnvValue('VITE_OPENCLAW_AGENT')
+  const envSystemPrompt = getEnvValue('VITE_OPENCLAW_SYSTEM_PROMPT')
+  const envThinking = getEnvValue('VITE_OPENCLAW_THINKING')
   
   if (envUrl) config.openclaw.url = envUrl
   if (envToken) config.openclaw.token = envToken
   if (envAgent) config.openclaw.agent = envAgent
+  if (envSystemPrompt) config.openclaw.systemPrompt = envSystemPrompt
+  if (envThinking) config.openclaw.thinking = envThinking as any
   
   return config
 }

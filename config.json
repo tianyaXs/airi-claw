@@ -6,7 +6,8 @@
   "openclaw": {
     "url": "ws://127.0.0.1:18789",
     "token": "",
-    "agent": "main"
+    "agent": "main",
+    "systemPrompt": ""
   },
   
   "live2d": {

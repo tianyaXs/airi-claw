@@ -85,6 +85,29 @@ Agent ID，用于指定对话的 AI 角色或预设配置：
 - 默认值为 `main`，即使用 Gateway 的默认 Agent 配置
 - 可以在 Gateway 配置中定义多个 Agent，如 `coder`、`writer` 等
 
+#### VITE_OPENCLAW_SYSTEM_PROMPT
+
+系统提示词，用于自定义 AI 的行为和回复风格：
+
+- 会在每次对话时作为额外的系统提示词发送给 AI
+- 可以用来改变 AI 的语气、角色、知识范围等
+- 支持多行文本
+
+**示例：**
+```env
+# 让 AI 用可爱的语气回答
+VITE_OPENCLAW_SYSTEM_PROMPT=你是一个可爱的虚拟助手，请用可爱的语气回答用户的问题
+
+# 让 AI 扮演特定角色
+VITE_OPENCLAW_SYSTEM_PROMPT=你是一位专业的编程导师，请用简洁清晰的方式解释技术概念
+
+# 多行提示词（换行用 \n）
+VITE_OPENCLAW_SYSTEM_PROMPT=你是一个二次元虚拟主播，性格活泼开朗。\n回答问题时请：\n1. 使用颜文字和可爱的语气\n2. 适当加入一些网络流行语\n3. 保持友好和耐心
+```
+
+**配置优先级：**
+环境变量 > config.json > 默认值
+
 
 ## 使用
 

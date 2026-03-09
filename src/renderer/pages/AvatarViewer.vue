@@ -198,6 +198,8 @@ async function initOpenClaw() {
     url: cfg.openclaw.url,
     agent: cfg.openclaw.agent,
     token: cfg.openclaw.token,
+    systemPrompt: cfg.openclaw.systemPrompt,
+    thinking: cfg.openclaw.thinking,
     autoReconnect: true,
     reconnectInterval: 5000,
   })
