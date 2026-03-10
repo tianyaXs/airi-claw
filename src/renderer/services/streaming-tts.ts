@@ -1,9 +1,18 @@
-// 流式 TTS 管理器 - 预合成模式
+// 流式 TTS 管理器 - 支持真实口型同步和文字流式显示
+import { LipSyncDriver } from './lip-sync-driver'
+
 interface QueuedItem {
   text: string
   audioUrl?: string
   isSynthesized: boolean
   isSynthesizing: boolean
+}
+
+export interface StreamingTTSCallbacks {
+  onLipSync?: (value: number) => void
+  onTextDisplay?: (text: string, isNewChunk: boolean) => void
+  onPlaybackStart?: () => void
+  onPlaybackEnd?: () => void
 }
 
 export class StreamingTTS {
@@ -15,8 +24,12 @@ export class StreamingTTS {
   private voice: string
   private currentAudio: HTMLAudioElement | null = null
   private enabled = false
+  private lipSyncDriver = new LipSyncDriver()
+  private lipSyncUnsubscribe: (() => void) | null = null
+  private callbacks: StreamingTTSCallbacks = {}
+  private displayedText = ''
+  private isProcessing = false  // 防止并发处理
   
-  // 长度控制
   private readonly MIN_LENGTH = 60
   private readonly TARGET_LENGTH = 150
   private readonly MAX_LENGTH = 250
@@ -25,6 +38,10 @@ export class StreamingTTS {
     this.apiKey = apiKey
     this.endpoint = endpoint
     this.voice = voice
+  }
+
+  setCallbacks(callbacks: StreamingTTSCallbacks) {
+    this.callbacks = callbacks
   }
 
   setEnabled(enabled: boolean) {
@@ -38,55 +55,54 @@ export class StreamingTTS {
     return this.enabled
   }
 
-  // 添加增量内容
   addText(deltaText: string) {
-    if (!this.enabled || !deltaText) {
-      return
-    }
-
+    if (!this.enabled || !deltaText) return
     this.buffer += deltaText
-    console.log('[StreamingTTS] 缓冲区:', this.buffer.length, '字符')
-
-    this.checkAndCut()
+    this.scheduleProcess()
   }
 
-  // 检查并切分
-  private checkAndCut() {
-    if (this.buffer.length < this.MIN_LENGTH) {
-      return
-    }
+  // 调度处理，避免并发
+  private scheduleProcess() {
+    if (this.isProcessing) return
+    this.isProcessing = true
+    
+    // 使用微任务确保在当前调用栈清空后处理
+    Promise.resolve().then(() => {
+      this.processBuffer()
+      this.isProcessing = false
+      
+      // 如果 buffer 还有足够内容，继续处理
+      if (this.buffer.length >= this.MIN_LENGTH) {
+        this.scheduleProcess()
+      }
+    })
+  }
 
-    const cutIndex = this.findBestCutPoint()
+  private processBuffer() {
+    while (this.buffer.length >= this.MIN_LENGTH) {
+      const cutIndex = this.findBestCutPoint()
+      if (cutIndex <= 0) break
 
-    if (cutIndex > 0) {
       const text = this.buffer.slice(0, cutIndex).trim()
       this.buffer = this.buffer.slice(cutIndex).trimStart()
 
       if (text) {
-        console.log('[StreamingTTS] 切分:', text.length, '字')
-        
-        // 添加到队列
+        console.log('[StreamingTTS] Queue chunk:', text.substring(0, 40))
         this.playQueue.push({
           text: this.cleanForTTS(text),
           isSynthesized: false,
           isSynthesizing: false
         })
 
-        // 如果正在播放，开始预合成下一个
         if (this.isPlaying) {
           this.preSynthesizeNext()
         } else {
-          // 没有播放，直接开始播放
           this.tryPlayNext()
         }
-
-        // 继续检查是否还能切分
-        setTimeout(() => this.checkAndCut(), 0)
       }
     }
   }
 
-  // 寻找最佳切分点
   private findBestCutPoint(): number {
     const len = this.buffer.length
     if (len < this.MIN_LENGTH) return 0
@@ -140,7 +156,6 @@ export class StreamingTTS {
     return 0
   }
 
-  // 清理文本
   private cleanForTTS(text: string): string {
     return text
       .replace(/^#{1,6}\s+/gm, '')
@@ -155,19 +170,32 @@ export class StreamingTTS {
       .trim()
   }
 
-  // 预合成队列中的下一个
   private async preSynthesizeNext() {
-    // 找到第一个未合成且未在合成中的项
-    const item = this.playQueue.find(i => !i.isSynthesized && !i.isSynthesizing)
+    // 跳过正在播放的 item（playQueue[0]），只预合成后面的
+    const item = this.playQueue.slice(1).find(i => !i.isSynthesized && !i.isSynthesizing)
     if (!item) return
 
     item.isSynthesizing = true
-    console.log('[StreamingTTS] 预合成:', item.text.substring(0, 30) + '...')
+    console.log('[StreamingTTS] Pre-synth:', item.text.substring(0, 30))
 
+    try {
+      const result = await this.synthesize(item.text)
+      if (result.success && result.url) {
+        item.audioUrl = result.url
+        item.isSynthesized = true
+      }
+    } catch (error) {
+      console.error('[StreamingTTS] Pre-synth failed:', error)
+    } finally {
+      item.isSynthesizing = false
+    }
+  }
+
+  private async synthesize(text: string): Promise<{success: boolean, url?: string}> {
     try {
       const result = await window.electron.ipcRenderer.invoke(
         'tts:synthesize',
-        item.text,
+        text,
         this.apiKey,
         this.endpoint,
         this.voice
@@ -175,24 +203,31 @@ export class StreamingTTS {
 
       if (result.success) {
         const data = result.data
-        item.audioUrl = data.output?.audio?.url || data.output?.wav
-        item.isSynthesized = true
-        console.log('[StreamingTTS] 预合成完成')
+        // 尝试多种可能的 URL 格式
+        const url = data.output?.audio?.url 
+          || data.output?.wav 
+          || data.output?.audio_url 
+          || data.audio?.url 
+          || data.wav 
+          || data.url
+        if (url) {
+          console.log('[StreamingTTS] Got URL:', url.substring(0, 60) + '...')
+          return { success: true, url }
+        }
+        console.warn('[StreamingTTS] No URL in response:', data)
       }
+      return { success: false }
     } catch (error) {
-      console.error('[StreamingTTS] 预合成失败:', error)
-    } finally {
-      item.isSynthesizing = false
+      console.error('[StreamingTTS] Synth error:', error)
+      return { success: false }
     }
   }
 
-  // 尝试播放下一个
   private tryPlayNext() {
     if (this.isPlaying || this.playQueue.length === 0) return
     this.playNext()
   }
 
-  // 播放下一个
   private async playNext() {
     if (this.isPlaying || this.playQueue.length === 0) return
 
@@ -204,90 +239,93 @@ export class StreamingTTS {
     }
 
     this.isPlaying = true
-    console.log('[StreamingTTS] 播放:', item.text.substring(0, 40) + '...')
+    console.log('[StreamingTTS] Play:', item.text.substring(0, 40))
 
-    // 开始预合成下一个（在后台）
+    // 预合成下一个（后台）
     this.preSynthesizeNext()
 
     try {
-      // 如果还没合成，等待合成完成
       if (!item.isSynthesized) {
-        console.log('[StreamingTTS] 等待合成...')
-        item.isSynthesizing = true
-        
-        const result = await window.electron.ipcRenderer.invoke(
-          'tts:synthesize',
-          item.text,
-          this.apiKey,
-          this.endpoint,
-          this.voice
-        )
-
-        item.isSynthesizing = false
-        
-        if (!result.success) {
-          throw new Error(result.error || 'TTS 合成失败')
+        console.log('[StreamingTTS] Wait synth...')
+        const result = await this.synthesize(item.text)
+        if (!result.success || !result.url) {
+          throw new Error('TTS failed')
         }
-
-        const data = result.data
-        item.audioUrl = data.output?.audio?.url || data.output?.wav
+        item.audioUrl = result.url
         item.isSynthesized = true
       }
 
-      // 播放音频
       if (item.audioUrl) {
-        await this.playAudio(item.audioUrl)
+        await this.playAudio(item.audioUrl, item.text)
       }
-
-      console.log('[StreamingTTS] 播放完成')
     } catch (error) {
-      console.error('[StreamingTTS] 播放失败:', error)
+      console.error('[StreamingTTS] Play failed:', error)
+      // 失败后从队列移除，继续播放下一个
     } finally {
       this.isPlaying = false
-      this.currentAudio = null
-      this.playQueue.shift() // 移除已播放的
+      this.cleanupAudio()
+      this.playQueue.shift()
 
-      // 继续播放下一个（应该已经预合成好了）
       if (this.playQueue.length > 0) {
         setTimeout(() => this.tryPlayNext(), 10)
+      } else {
+        this.callbacks.onPlaybackEnd?.()
       }
     }
   }
 
-  // 播放音频
-  private playAudio(url: string): Promise<void> {
+  private playAudio(url: string, text: string): Promise<void> {
     return new Promise((resolve, reject) => {
-      const audio = new Audio(url)
+      const audio = new Audio()
+      // 设置跨域属性，允许 Web Audio API 分析
+      audio.crossOrigin = 'anonymous'
+      audio.src = url
       this.currentAudio = audio
 
-      const cleanup = () => {
-        audio.onended = null
-        audio.onerror = null
-        this.currentAudio = null
+      // 连接口型同步
+      this.lipSyncDriver.connect(audio).then(() => {
+        // 清理旧订阅
+        if (this.lipSyncUnsubscribe) {
+          this.lipSyncUnsubscribe()
+        }
+        // 订阅新的口型值
+        this.lipSyncUnsubscribe = this.lipSyncDriver.onValueChange((value) => {
+          this.callbacks.onLipSync?.(value)
+        })
+      }).catch(err => {
+        console.warn('[StreamingTTS] Lip sync failed:', err)
+      })
+
+      audio.onplay = () => {
+        this.callbacks.onPlaybackStart?.()
+        this.displayedText += (this.displayedText ? ' ' : '') + text
+        this.callbacks.onTextDisplay?.(this.displayedText, true)
       }
 
       audio.onended = () => {
-        cleanup()
         resolve()
       }
 
       audio.onerror = () => {
-        cleanup()
-        reject(new Error('播放失败'))
+        reject(new Error('Playback error'))
       }
 
-      audio.play().catch((err) => {
-        cleanup()
-        reject(err)
-      })
+      audio.play().catch(reject)
     })
   }
 
-  // 完成
+  private cleanupAudio() {
+    if (this.lipSyncUnsubscribe) {
+      this.lipSyncUnsubscribe()
+      this.lipSyncUnsubscribe = null
+    }
+    this.lipSyncDriver.disconnect()
+    this.currentAudio = null
+  }
+
   finish() {
     if (!this.enabled) return
 
-    // 切分剩余内容
     if (this.buffer.trim()) {
       this.playQueue.push({
         text: this.cleanForTTS(this.buffer),
@@ -297,22 +335,30 @@ export class StreamingTTS {
       this.buffer = ''
     }
 
-    // 如果没有在播放，开始播放
     if (!this.isPlaying && this.playQueue.length > 0) {
       this.tryPlayNext()
     }
   }
 
-  // 重置
   reset() {
-    console.log('[StreamingTTS] 重置状态')
+    console.log('[StreamingTTS] Reset')
     if (this.currentAudio) {
       this.currentAudio.pause()
-      this.currentAudio = null
     }
+    this.cleanupAudio()
     this.buffer = ''
     this.playQueue = []
     this.isPlaying = false
+    this.isProcessing = false
+    this.displayedText = ''
+  }
+
+  getDisplayedText(): string {
+    return this.displayedText
+  }
+
+  clearDisplayedText() {
+    this.displayedText = ''
   }
 }
 

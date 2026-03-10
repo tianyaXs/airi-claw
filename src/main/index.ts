@@ -2,7 +2,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readFileSync } from 'node:fs'
 import { electronApp, optimizer } from '@electron-toolkit/utils'
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, ipcMain, screen } from 'electron'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -66,6 +66,13 @@ async function createWindow() {
     if (typeof x === 'number' && typeof y === 'number' && !isNaN(x) && !isNaN(y)) {
       window.setPosition(Math.round(x), Math.round(y))
     }
+  })
+
+  // 全局鼠标屏幕坐标（用于窗口外鼠标跟随）
+  ipcMain.handle('screen:get-cursor-point', () => {
+    const pt = screen.getCursorScreenPoint()
+    const pos = window.getPosition()
+    return { x: pt.x - pos[0], y: pt.y - pos[1] }
   })
 
   // TTS 语音合成

@@ -9,6 +9,7 @@ import ChatInput from '../components/ChatInput.vue'
 import { loadConfig, getConfig } from '../utils/config'
 import { initTTS, getTTS } from '../services/tts'
 import { StreamingTTS } from '../services/streaming-tts'
+import { EmojiActionController } from '../services/emoji-action'
 
 const canvasContainerRef = ref<HTMLDivElement>()
 const isLoading = ref(true)
@@ -21,6 +22,7 @@ const ttsEnabled = ref(false)
 
 let pixiApp: Application | null = null
 let streamingTTS: StreamingTTS | null = null
+let emojiController: EmojiActionController | null = null
 
 // 窗口拖拽
 const isWindowDragging = ref(false)
@@ -91,6 +93,8 @@ async function stopWindowDrag() {
 let live2dModel: Live2DModel | null = null
 let openclawClient: OpenClawClient | null = null
 let messageTimeout: ReturnType<typeof setTimeout> | null = null
+let mouseMoveHandler: ((e: MouseEvent) => void) | null = null
+let focusLoopId: ReturnType<typeof setInterval> | null = null
 
 const CANVAS_WIDTH = 400
 const CANVAS_HEIGHT = 500
@@ -163,12 +167,16 @@ async function initLive2D() {
     
     const modelUrl = getConfig().live2d.modelPath
     live2dModel = await Live2DModel.from(modelUrl, {
-      autoInteract: true,
+      autoInteract: false,
       autoUpdate: true,
     })
     
     pixiApp.stage.addChild(live2dModel)
     setScaleAndPosition()
+    
+    // 初始化 Emoji 动作控制器
+    emojiController = new EmojiActionController()
+    emojiController.bind(live2dModel)
     
     live2dModel.on('hit', (hitAreas: string[]) => {
       if (hitAreas.includes('body') && live2dModel) {
@@ -184,7 +192,37 @@ async function initLive2D() {
     } catch (motionErr) {
       console.warn('[Live2D] Could not start idle motion:', motionErr)
     }
-    
+
+    // 鼠标跟随：直接操作 focusController，绕过坐标转换问题
+    // focusController.focus(x, y) 接受 [-1, 1] 范围的归一化坐标
+    // x: -1=左, 1=右；y: -1=上, 1=下
+    const applyFocus = (winRelX: number, winRelY: number) => {
+      if (!live2dModel) return
+      const fc = (live2dModel as any).internalModel?.focusController
+      if (!fc) return
+      // 窗口宽高
+      const W = window.innerWidth
+      const H = window.innerHeight
+      // 归一化到 [-1, 1]，中心为 (0, 0)
+      const nx = (winRelX / W) * 2 - 1
+      const ny = (winRelY / H) * 2 - 1
+      fc.focus(nx, ny)
+    }
+
+    mouseMoveHandler = (e: MouseEvent) => {
+      applyFocus(e.clientX, e.clientY)
+    }
+    document.addEventListener('mousemove', mouseMoveHandler)
+
+    // 轮询全局屏幕坐标（支持鼠标在窗口外时继续跟随）
+    focusLoopId = setInterval(async () => {
+      if (!live2dModel) return
+      try {
+        const pt = await window.electron.ipcRenderer.invoke('screen:get-cursor-point')
+        applyFocus(pt.x, pt.y)
+      } catch {}
+    }, 50) // 20fps 轮询足够，窗口内由 mousemove 补充
+
     isLoading.value = false
   } catch (err) {
     const errorMsg = (err as Error).message || String(err)
@@ -246,20 +284,24 @@ ${command}
       timestamp: Date.now()
     })
     if (message.role === 'assistant') {
-      showMessage(message.content)
-
       // 完成流式 TTS，播放剩余内容
+      // 注意：文字显示改为在 TTS 播放时通过回调显示
       if (streamingTTS && ttsEnabled.value) {
         streamingTTS.finish()
+      } else {
+        // 没有 TTS 时，直接显示文字
+        showMessage(message.content)
       }
     }
   })
   
   openclawClient.on('chunk', (data: { content: string, fullContent: string }) => {
-    isSpeaking.value = true
-    currentMessage.value = data.fullContent
+    // 流式过程中检测 emoji 触发表情（语音播报前检测）
+    if (emojiController) {
+      emojiController.triggerFromText(data.content)
+    }
 
-    // 流式 TTS - 直接播放增量内容
+    // 流式 TTS - 添加文本到队列
     if (streamingTTS && ttsEnabled.value) {
       streamingTTS.addText(data.content)
     }
@@ -295,6 +337,10 @@ function showMessage(content: string) {
   messageTimeout = setTimeout(() => {
     isSpeaking.value = false
     currentMessage.value = ''
+    // 播报结束，恢复 neutral
+    if (emojiController) {
+      emojiController.reset()
+    }
   }, displayTime)
 }
 
@@ -341,6 +387,18 @@ function cleanup() {
   if (messageTimeout) {
     clearTimeout(messageTimeout)
   }
+  if (mouseMoveHandler) {
+    document.removeEventListener('mousemove', mouseMoveHandler)
+    mouseMoveHandler = null
+  }
+  if (focusLoopId) {
+    clearInterval(focusLoopId)
+    focusLoopId = null
+  }
+  if (emojiController) {
+    emojiController.unbind()
+    emojiController = null
+  }
   if (live2dModel) {
     try {
       live2dModel.destroy()
@@ -382,6 +440,42 @@ onMounted(async () => {
       config.tts.endpoint || 'https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation',
       config.tts.voice || 'Momo'
     )
+
+    // 设置回调
+    streamingTTS.setCallbacks({
+      // 口型同步
+      onLipSync: (value) => {
+        if (emojiController) {
+          emojiController.setLipSync(value)
+        }
+      },
+      // 文字流式显示
+      onTextDisplay: (text, isNewChunk) => {
+        currentMessage.value = text
+        if (isNewChunk) {
+          isSpeaking.value = true
+          // 清除之前的超时
+          if (messageTimeout) clearTimeout(messageTimeout)
+          // 根据文字长度设置显示时间
+          const displayTime = Math.min(Math.max(text.length * 50, 4000), 15000)
+          messageTimeout = setTimeout(() => {
+            isSpeaking.value = false
+            currentMessage.value = ''
+            streamingTTS?.clearDisplayedText()
+            // 播报结束恢复 neutral
+            if (emojiController) {
+              emojiController.reset()
+            }
+          }, displayTime)
+        }
+      },
+      onPlaybackStart: () => {
+        console.log('[Avatar] TTS 播放开始')
+      },
+      onPlaybackEnd: () => {
+        console.log('[Avatar] TTS 播放结束')
+      }
+    })
   }
 
   setTimeout(() => {
@@ -399,11 +493,6 @@ onUnmounted(() => {
   <div class="airi-claw-container">
     <!-- 主内容区 -->
     <div class="main-content">
-      <!-- 左侧工具栏 -->
-      <div class="left-toolbar">
-        <!-- 可以在这里添加其他工具按钮 -->
-      </div>
-      
       <!-- 中间：虚拟形象 -->
       <div class="avatar-wrapper">
         <div ref="canvasContainerRef" class="canvas-container" />
@@ -480,49 +569,6 @@ onUnmounted(() => {
   justify-content: center;
   padding: 40px 60px 100px;
   position: relative;
-}
-
-/* 左侧工具栏 */
-.left-toolbar {
-  position: absolute;
-  left: 16px;
-  top: 50%;
-  transform: translateY(-50%);
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  z-index: 100;
-}
-
-.toolbar-btn {
-  width: 44px;
-  height: 44px;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.15);
-  backdrop-filter: blur(10px);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  color: rgba(255, 255, 255, 0.9);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.2s ease;
-  position: relative;
-}
-
-.toolbar-btn:hover {
-  background: rgba(255, 255, 255, 0.25);
-  transform: scale(1.05);
-}
-
-.toolbar-btn.active {
-  background: rgba(102, 126, 234, 0.8);
-  border-color: rgba(102, 126, 234, 0.5);
-}
-
-.toolbar-btn svg {
-  width: 22px;
-  height: 22px;
 }
 
 .badge {
