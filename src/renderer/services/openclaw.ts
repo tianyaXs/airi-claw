@@ -390,6 +390,22 @@ export class OpenClawClient extends SimpleEventEmitter {
         this.emit('error', new Error(event.payload?.error || 'Unknown error'))
         break
 
+      case 'agent':
+        // 处理 agent 流式事件
+        if (event.payload?.stream === 'assistant' && event.payload?.data) {
+          const data = event.payload.data
+          if (data.delta) {
+            // 累积完整内容
+            this.messageBuffer += data.delta
+            this.emit('chunk', {
+              content: data.delta,
+              fullContent: this.messageBuffer,
+              streaming: true,
+            })
+          }
+        }
+        break
+
       case 'chat':
         if (event.payload?.message) {
           const msg = event.payload.message
@@ -418,11 +434,15 @@ export class OpenClawClient extends SimpleEventEmitter {
             console.log('[OpenClaw] Emitting final message:', message)
             this.emit('message', message)
           } else if (event.payload.state === 'delta') {
-            // 流式更新
+            // 流式更新 - 计算增量内容
+            const previousLength = this.messageBuffer.length
+            const deltaContent = content.slice(previousLength)
             this.messageBuffer = content
+            
+            console.log('[OpenClaw] Chat delta:', deltaContent.substring(0, 50), 'full length:', content.length)
             this.emit('chunk', {
-              content: content,
-              fullContent: content,
+              content: deltaContent,        // 增量内容
+              fullContent: content,         // 完整内容
               streaming: true,
             })
           }

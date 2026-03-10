@@ -8,6 +8,7 @@ import { OpenClawClient } from '../services/openclaw'
 import ChatInput from '../components/ChatInput.vue'
 import { loadConfig, getConfig } from '../utils/config'
 import { initTTS, getTTS } from '../services/tts'
+import { StreamingTTS } from '../services/streaming-tts'
 
 const canvasContainerRef = ref<HTMLDivElement>()
 const isLoading = ref(true)
@@ -19,6 +20,7 @@ const chatHistory = ref<Array<{ role: string; content: string; timestamp: number
 const ttsEnabled = ref(false)
 
 let pixiApp: Application | null = null
+let streamingTTS: StreamingTTS | null = null
 
 // 窗口拖拽
 const isWindowDragging = ref(false)
@@ -245,12 +247,22 @@ ${command}
     })
     if (message.role === 'assistant') {
       showMessage(message.content)
+
+      // 完成流式 TTS，播放剩余内容
+      if (streamingTTS && ttsEnabled.value) {
+        streamingTTS.finish()
+      }
     }
   })
   
   openclawClient.on('chunk', (data: { content: string, fullContent: string }) => {
     isSpeaking.value = true
     currentMessage.value = data.fullContent
+
+    // 流式 TTS - 直接播放增量内容
+    if (streamingTTS && ttsEnabled.value) {
+      streamingTTS.addText(data.content)
+    }
   })
   
   openclawClient.on('error', (err: Error) => {
@@ -271,15 +283,7 @@ function showMessage(content: string) {
   // 截断过长的消息，保留前200字符
   currentMessage.value = content.length > 200 ? content.slice(0, 200) + '...' : content
   
-  // 播放 TTS
-  const tts = getTTS()
-  console.log('[TTS] showMessage 调用, tts实例:', !!tts, 'ttsEnabled:', tts?.isEnabled())
-  if (tts?.isEnabled()) {
-    console.log('[TTS] 开始朗读:', content.substring(0, 30) + '...')
-    tts.speak(content)
-  } else {
-    console.log('[TTS] 跳过朗读: TTS未启用')
-  }
+  // TTS 已由 StreamingTTS 在流式过程中处理，这里不再重复播放
   
   if (messageTimeout) {
     clearTimeout(messageTimeout)
@@ -296,6 +300,11 @@ function showMessage(content: string) {
 
 async function handleSendMessage(content: string) {
   if (!content.trim()) return
+  
+  // 重置流式 TTS
+  if (streamingTTS) {
+    streamingTTS.reset()
+  }
   
   chatHistory.value.push({
     role: 'user',
@@ -322,9 +331,9 @@ async function handleSendMessage(content: string) {
 
 function handleTTSToggle(enabled: boolean) {
   console.log('[TTS] 语音朗读:', enabled ? '开启' : '关闭')
-  const tts = getTTS()
-  if (tts) {
-    tts.setEnabled(enabled)
+  // 控制 StreamingTTS
+  if (streamingTTS) {
+    streamingTTS.setEnabled(enabled)
   }
 }
 
@@ -365,6 +374,15 @@ onMounted(async () => {
     voice: config.tts?.voice,
     enabled: false, // 默认关闭
   })
+
+  // 初始化流式 TTS
+  if (config.tts?.apiKey) {
+    streamingTTS = new StreamingTTS(
+      config.tts.apiKey,
+      config.tts.endpoint || 'https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation',
+      config.tts.voice || 'Momo'
+    )
+  }
 
   setTimeout(() => {
     initLive2D()

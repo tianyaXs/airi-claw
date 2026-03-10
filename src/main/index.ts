@@ -86,7 +86,7 @@ async function createWindow() {
           model: 'qwen3-tts-flash',
           input: {
             text: cleanText,
-            voice: voice || 'Cherry',
+            voice: voice || 'Momo',
             language_type: 'Chinese',
           },
         }),
