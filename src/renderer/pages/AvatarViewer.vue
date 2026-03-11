@@ -184,14 +184,7 @@ async function initLive2D() {
       }
     })
     
-    try {
-      const internalModel = (live2dModel as any).internalModel
-      if (internalModel?.motionManager?.groups?.Idle !== undefined) {
-        live2dModel.motion('Idle')
-      }
-    } catch (motionErr) {
-      console.warn('[Live2D] Could not start idle motion:', motionErr)
-    }
+    // 初始化完成，EmojiActionController 会自动启动待机循环
 
     // 鼠标跟随：直接操作 focusController，绕过坐标转换问题
     // focusController.focus(x, y) 接受 [-1, 1] 范围的归一化坐标
@@ -205,7 +198,8 @@ async function initLive2D() {
       const H = window.innerHeight
       // 归一化到 [-1, 1]，中心为 (0, 0)
       const nx = (winRelX / W) * 2 - 1
-      const ny = (winRelY / H) * 2 - 1
+      // Y 轴翻转：鼠标在上（Y小）时，人物向上看（Y负）
+      const ny = 1 - (winRelY / H) * 2
       fc.focus(nx, ny)
     }
 
@@ -322,8 +316,20 @@ ${command}
 
 function showMessage(content: string) {
   isSpeaking.value = true
+  
+  // 解析完整消息中的表情标签
+  if (emojiController) {
+    emojiController.triggerFromText(content)
+  }
+  
+  // 去掉表情标签和动作标签，只保留纯文本
+  let cleanContent = content
+    .replace(/\[表情:\w+\]/g, '')
+    .replace(/\[动作:\w+\]/g, '')
+    .trim()
+  
   // 截断过长的消息，保留前200字符
-  currentMessage.value = content.length > 200 ? content.slice(0, 200) + '...' : content
+  currentMessage.value = cleanContent.length > 200 ? cleanContent.slice(0, 200) + '...' : cleanContent
   
   // TTS 已由 StreamingTTS 在流式过程中处理，这里不再重复播放
   
@@ -332,7 +338,7 @@ function showMessage(content: string) {
   }
   
   // 根据消息长度计算显示时间：每50ms一个字符，最少4000ms，最多15000ms
-  const displayTime = Math.min(Math.max(content.length * 50, 4000), 15000)
+  const displayTime = Math.min(Math.max(cleanContent.length * 50, 4000), 15000)
   
   messageTimeout = setTimeout(() => {
     isSpeaking.value = false
@@ -803,5 +809,20 @@ onUnmounted(() => {
   z-index: 100;
   display: flex;
   justify-content: center;
+}
+
+/* 动作测试面板 */
+.motion-test-panel {
+  position: absolute;
+  left: 16px;
+  top: 50px;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(10px);
+  border-radius: 12px;
+  padding: 12px;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 </style>
