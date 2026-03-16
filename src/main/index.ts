@@ -69,6 +69,15 @@ async function createWindow() {
   // IPC 处理
   ipcMain.handle('window:minimize', () => window.minimize())
   ipcMain.handle('window:close', () => window.close())
+  // 输入框获得焦点时降低窗口层级，让系统输入法候选框显示在窗口上方；失焦时恢复
+  ipcMain.handle('window:set-input-focus', (_event, hasFocus: boolean) => {
+    if (process.platform !== 'darwin') return
+    if (hasFocus) {
+      window.setAlwaysOnTop(true, 'floating', 0)
+    } else {
+      window.setAlwaysOnTop(true, 'screen-saver', 1)
+    }
+  })
   ipcMain.handle('window:get-position', () => {
     const pos = window.getPosition()
     return { x: pos[0], y: pos[1] }

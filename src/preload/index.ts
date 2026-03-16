@@ -3,6 +3,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 const validChannels = [
   'window:minimize',
   'window:close',
+  'window:set-input-focus',
   'window:get-position',
   'window:set-position',
   'app:get-asset-path',

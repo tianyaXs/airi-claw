@@ -1,4 +1,4 @@
-<script setup lang="ts">import { ref, nextTick, computed } from 'vue'
+<script setup lang="ts">import { ref, nextTick, computed, watch } from 'vue'
 
 const props = defineProps<{
   ttsEnabled?: boolean
@@ -62,6 +62,25 @@ function handleCompositionStart() {
 function handleCompositionEnd() {
   isComposing.value = false
 }
+
+// 输入框焦点变化时通知主进程调整窗口层级，避免输入法候选框被窗口盖住（仅 macOS）
+function onInputFocus() {
+  if (typeof window.electron?.ipcRenderer?.invoke === 'function') {
+    window.electron.ipcRenderer.invoke('window:set-input-focus', true)
+  }
+}
+function onInputBlur() {
+  if (typeof window.electron?.ipcRenderer?.invoke === 'function') {
+    window.electron.ipcRenderer.invoke('window:set-input-focus', false)
+  }
+}
+
+// 写字板关闭时也恢复窗口层级（防止未触发 blur 的情况）
+watch(isInputOpen, (open) => {
+  if (!open && typeof window.electron?.ipcRenderer?.invoke === 'function') {
+    window.electron.ipcRenderer.invoke('window:set-input-focus', false)
+  }
+})
 
 function toggleInput() {
   isInputOpen.value = !isInputOpen.value
@@ -276,6 +295,8 @@ function truncateContent(content: string): string {
             @keydown="handleKeydown"
             @compositionstart="handleCompositionStart"
             @compositionend="handleCompositionEnd"
+            @focus="onInputFocus"
+            @blur="onInputBlur"
           />
           
           <div class="dialog-footer">
