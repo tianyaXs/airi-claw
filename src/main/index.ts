@@ -2,9 +2,20 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readFileSync } from 'node:fs'
 import { electronApp, optimizer } from '@electron-toolkit/utils'
-import { app, BrowserWindow, ipcMain, screen } from 'electron'
+import { app, BrowserWindow, ipcMain, screen, protocol } from 'electron'
+import { initOpenClawService } from './openclaw'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
+
+// 获取资源路径
+function getAssetPath(relativePath: string): string {
+  if (process.env.NODE_ENV === 'development') {
+    return join(__dirname, '../../public', relativePath)
+  } else {
+    // 生产环境：资源在 app.asar 中
+    return join(__dirname, '../../public', relativePath)
+  }
+}
 
 // 读取配置文件
 const configPath = join(__dirname, '../../config.json')
@@ -68,6 +79,11 @@ async function createWindow() {
     }
   })
 
+  // 获取资源路径
+  ipcMain.handle('app:get-asset-path', (_event, relativePath: string) => {
+    return getAssetPath(relativePath)
+  })
+
   // 全局鼠标屏幕坐标（用于窗口外鼠标跟随）
   ipcMain.handle('screen:get-cursor-point', () => {
     const pt = screen.getCursorScreenPoint()
@@ -122,10 +138,25 @@ async function createWindow() {
   window.setVisibleOnAllWorkspaces(true)
   window.on('ready-to-show', () => window.show())
 
-  // 加载开发服务器
-  const devServerUrl = 'http://localhost:5173'
-  await window.loadURL(devServerUrl)
-  window.webContents.openDevTools({ mode: 'detach' })
+  // 初始化 OpenClaw 服务（在主进程中运行，绕过 CORS）
+  initOpenClawService({
+    url: config.openclaw?.url || 'ws://127.0.0.1:18789',
+    token: config.openclaw?.token || '',
+    agent: config.openclaw?.agent || 'main'
+  }, window)
+
+  // 加载页面 - 开发模式或生产模式
+  if (process.env.NODE_ENV === 'development') {
+    // 开发模式：加载开发服务器
+    const devServerUrl = 'http://localhost:5173'
+    await window.loadURL(devServerUrl)
+    window.webContents.openDevTools({ mode: 'detach' })
+  } else {
+    // 生产模式：加载打包后的文件
+    const indexPath = join(__dirname, '../renderer/index.html')
+    console.log('[Main] Loading production build:', indexPath)
+    await window.loadFile(indexPath)
+  }
 
   return window
 }

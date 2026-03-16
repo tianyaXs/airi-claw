@@ -51,13 +51,18 @@ async function loadConfig(): Promise<AppConfig> {
         agent: 'main'
       },
       live2d: {
-        modelPath: '/assets/live2d/models/hiyori/Hiyori.model3.json'
+        modelPath: './assets/live2d/models/hiyori/Hiyori.model3.json'
       },
       window: {
         width: 400,
         height: 700
       }
     }
+  }
+  
+  // 修复模型路径 - 使用相对路径
+  if (config.live2d?.modelPath?.startsWith('/')) {
+    config.live2d.modelPath = '.' + config.live2d.modelPath
   }
   
   // 从环境变量覆盖

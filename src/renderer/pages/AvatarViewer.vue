@@ -20,6 +20,14 @@ const currentMessage = ref('')
 const chatHistory = ref<Array<{ role: string; content: string; timestamp: number }>>([])
 const ttsEnabled = ref(false)
 
+// 配置界面
+const showConfig = ref(false)
+const configForm = ref({
+  openclawUrl: '',
+  openclawToken: '',
+  ttsApiKey: ''
+})
+
 let pixiApp: Application | null = null
 let streamingTTS: StreamingTTS | null = null
 let emojiController: EmojiActionController | null = null
@@ -304,13 +312,37 @@ ${command}
   openclawClient.on('error', (err: Error) => {
     console.error('[OpenClaw] Error:', err)
     connectionStatus.value = 'disconnected'
+    
+    // 检查是否是配对错误，显示提示消息
+    if (err.message?.includes('openclaw devices approve')) {
+      const match = err.message.match(/openclaw devices approve (\S+)/)
+      const requestId = match ? match[1] : ''
+      showPairingMessage(requestId)
+    }
+  })
+  
+  openclawClient.on('pairingRequired', (data: { requestId: string }) => {
+    console.log('[OpenClaw] Pairing required:', data.requestId)
+    showPairingMessage(data.requestId)
+  })
+  
+  openclawClient.on('deviceMismatch', (data: { deviceId: string }) => {
+    console.log('[OpenClaw] Device mismatch:', data.deviceId)
+    showMessage(`⚠️ 设备身份不匹配\n\n请在终端运行：\nopenclaw devices remove ${data.deviceId}\n\n然后重启应用，会自动弹出新的配对命令`)
   })
   
   try {
     await openclawClient.connect()
-  } catch (err) {
+  } catch (err: any) {
     console.error('[OpenClaw] Failed to connect:', err)
     connectionStatus.value = 'disconnected'
+    const errorMessage = err?.message || ''
+    if (errorMessage.includes('device identity mismatch') || errorMessage.includes('Device identity mismatch')) {
+      const deviceId = err?.deviceId || '未知'
+      showMessage(`⚠️ 设备身份不匹配\n\n请在终端运行：\nopenclaw devices remove ${deviceId}\n\n然后重启应用，会自动弹出新的配对命令`)
+    } else if (errorMessage.includes('gateway token missing') || errorMessage.includes('gateway.remote.token')) {
+      showMessage('🔑 网关需要 Token\n\n请在「配置」中填写 OpenClaw Token\n与网关的 gateway.auth.token 一致')
+    }
   }
 }
 
@@ -350,6 +382,22 @@ function showMessage(content: string) {
   }, displayTime)
 }
 
+// 显示配对提示消息
+function showPairingMessage(requestId: string) {
+  isSpeaking.value = true
+  currentMessage.value = `连接失败，请在终端运行：\nopenclaw devices approve ${requestId || '<request-id>'}`
+  
+  if (messageTimeout) {
+    clearTimeout(messageTimeout)
+  }
+  
+  // 显示较长时间（15秒），让用户有足够时间看到命令
+  messageTimeout = setTimeout(() => {
+    isSpeaking.value = false
+    currentMessage.value = ''
+  }, 15000)
+}
+
 async function handleSendMessage(content: string) {
   if (!content.trim()) return
   
@@ -369,11 +417,30 @@ async function handleSendMessage(content: string) {
       await openclawClient.sendMessage(content.trim())
     } catch (err: any) {
       console.error('[OpenClaw] Failed to send message:', err)
+      // 获取错误消息（支持 Error 对象和字符串）
+      const errorMessage = err?.message || String(err) || ''
+      console.error('[OpenClaw] Error message:', errorMessage)
+      
       // 检查是否是配对错误
-      if (err.message?.includes('pairing') || err.message?.includes('配对')) {
-        showMessage('连接失败，请检查设备已配对~')
+      if (errorMessage.includes('openclaw devices approve')) {
+        const match = errorMessage.match(/openclaw devices approve (\S+)/)
+        const requestId = match ? match[1] : ''
+        const command = `openclaw devices approve ${requestId}`
+        showMessage(`🔐 设备需要配对\n\n请在终端运行：\n\n${command}`)
+      } else if (errorMessage.includes('gateway token missing') || errorMessage.includes('gateway.remote.token')) {
+        showMessage('🔑 网关需要 Token\n\n请在「配置」中填写 OpenClaw Token\n与网关的 gateway.auth.token 一致')
+      } else if (errorMessage.includes('unauthorized') || errorMessage.includes('token')) {
+        showMessage('🔑 Token 验证失败\n\n请在配置中检查\nOpenClaw Token 是否正确')
+      } else if (errorMessage.includes('配对') || errorMessage.includes('pairing')) {
+        showMessage('❌ 连接失败\n请检查设备已配对~')
+      } else if (errorMessage.includes('WebSocket error') || errorMessage.includes('ECONNREFUSED')) {
+        showMessage('🌐 无法连接\n\nOpenClaw 服务器未启动\n请检查配置~')
       } else {
-        showMessage('发送消息失败，请重试~')
+        // 其他错误 - 显示完整错误信息
+        if (errorMessage.includes('device identity mismatch')) {
+           const deviceId = err?.deviceId || '未知'
+           showMessage(`⚠️ 设备身份不匹配\n\n请在终端运行：\nopenclaw devices remove ${deviceId}\n\n然后重启应用，会自动弹出新的配对命令`)
+        }
       }
     }
   } else {
@@ -386,6 +453,104 @@ function handleTTSToggle(enabled: boolean) {
   // 控制 StreamingTTS
   if (streamingTTS) {
     streamingTTS.setEnabled(enabled)
+  }
+}
+
+// 打开配置界面
+function openConfig() {
+  const config = getConfig()
+  configForm.value = {
+    openclawUrl: config.openclaw?.url || 'ws://127.0.0.1:18789',
+    openclawToken: config.openclaw?.token || '',
+    ttsApiKey: config.tts?.apiKey || ''
+  }
+  showConfig.value = true
+}
+
+// 关闭配置界面
+function closeConfig() {
+  showConfig.value = false
+}
+
+// 保存配置
+async function saveConfig() {
+  try {
+    // 更新内存中的配置
+    const config = getConfig()
+    config.openclaw.url = configForm.value.openclawUrl
+    config.openclaw.token = configForm.value.openclawToken
+    if (!config.tts) {
+      config.tts = {
+        apiKey: '',
+        endpoint: 'https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation',
+        voice: 'Momo',
+        enabled: false
+      }
+    }
+    config.tts.apiKey = configForm.value.ttsApiKey
+    
+    // 保存到 localStorage
+    localStorage.setItem('airi-claw-config', JSON.stringify({
+      openclaw: config.openclaw,
+      tts: config.tts
+    }))
+    
+    showMessage('配置已保存~')
+    closeConfig()
+    
+    // 提示重启应用
+    setTimeout(() => {
+      showMessage('请重启应用使配置生效~')
+    }, 2000)
+  } catch (err) {
+    console.error('[Config] Failed to save:', err)
+    showMessage('保存配置失败~')
+  }
+}
+
+// 加载本地配置
+function loadLocalConfig() {
+  try {
+    const saved = localStorage.getItem('airi-claw-config')
+    if (saved) {
+      const parsed = JSON.parse(saved)
+      const config = getConfig()
+      if (parsed.openclaw) {
+        config.openclaw = { ...config.openclaw, ...parsed.openclaw }
+      }
+      if (parsed.tts) {
+        config.tts = { ...config.tts, ...parsed.tts }
+      }
+      console.log('[Config] Loaded from localStorage')
+    }
+  } catch (err) {
+    console.error('[Config] Failed to load from localStorage:', err)
+  }
+}
+
+// 重置设备身份（清除主进程 device-keys.json 并重新生成密钥）
+async function resetDevice() {
+  if (!confirm('确定要重置设备身份吗？这会清除保存的设备密钥，需在终端执行 openclaw devices remove <deviceId> 后重新配对。')) return
+  try {
+    if (openclawClient) {
+      const result = await openclawClient.resetDeviceKeys()
+      if (result.success) {
+        showMessage('设备身份已重置，正在重新连接…')
+        connectionStatus.value = 'connecting'
+        try {
+          await openclawClient.connect()
+        } catch (e) {
+          // 连接会触发 NOT_PAIRED，界面会显示配对命令
+        }
+      } else {
+        showMessage('重置失败：' + (result.error || '请重试'))
+      }
+    } else {
+      showMessage('请重启应用后再试~')
+    }
+  } catch (err) {
+    console.error('[Device] Failed to reset:', err)
+    showMessage('重置失败，请重试~')
   }
 }
 
@@ -429,6 +594,9 @@ function cleanup() {
 
 onMounted(async () => {
   await loadConfig()
+  
+  // 加载本地保存的配置
+  loadLocalConfig()
 
   // 初始化 TTS
   const config = getConfig()
@@ -522,7 +690,7 @@ onUnmounted(() => {
       </div>
       
       <!-- 窗口拖拽手柄 -->
-      <div 
+      <div
         class="drag-handle"
         :class="connectionStatus"
         @mousedown="startWindowDrag"
@@ -539,6 +707,7 @@ onUnmounted(() => {
           <div class="arrow down">▼</div>
         </div>
       </div>
+
     </div>
     
     <!-- 底部输入区（包含书本） -->
@@ -552,7 +721,48 @@ onUnmounted(() => {
         @minimize="handleMinimize"
         @close="handleClose"
         @tts-toggle="handleTTSToggle"
+        @open-config="openConfig"
       />
+    </div>
+
+    <!-- 配置弹窗 -->
+    <div v-if="showConfig" class="config-modal" @click="closeConfig">
+      <div class="config-content" @click.stop>
+        <h3>应用配置</h3>
+
+        <div class="config-section">
+          <h4>OpenClaw 设置</h4>
+          <div class="config-item">
+            <label>服务器地址</label>
+            <input v-model="configForm.openclawUrl" type="text" placeholder="ws://127.0.0.1:18789" />
+          </div>
+          <div class="config-item">
+            <label>Token</label>
+            <input v-model="configForm.openclawToken" type="password" placeholder="输入 Token" />
+          </div>
+        </div>
+
+        <div class="config-section">
+          <h4>TTS 设置</h4>
+          <div class="config-item">
+            <label>API Key (阿里云 DashScope)</label>
+            <input v-model="configForm.ttsApiKey" type="password" placeholder="sk-..." />
+          </div>
+        </div>
+
+        <div class="config-section">
+          <h4>设备管理</h4>
+          <p style="font-size: 12px; color: rgba(255, 255, 255, 0.6); margin-bottom: 12px;">
+            如果遇到"设备身份不匹配"错误，点击下方按钮重置设备身份
+          </p>
+          <button class="btn-reset" @click="resetDevice">重置设备身份</button>
+        </div>
+
+        <div class="config-actions">
+          <button class="btn-secondary" @click="closeConfig">取消</button>
+          <button class="btn-primary" @click="saveConfig">保存</button>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -809,6 +1019,142 @@ onUnmounted(() => {
   z-index: 100;
   display: flex;
   justify-content: center;
+}
+
+/* 配置弹窗 */
+.config-modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(10px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.config-content {
+  background: rgba(30, 30, 30, 0.95);
+  border-radius: 16px;
+  padding: 24px;
+  width: 90%;
+  max-width: 420px;
+  max-height: 80vh;
+  overflow-y: auto;
+  color: white;
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* IE and Edge */
+}
+
+.config-content::-webkit-scrollbar {
+  display: none; /* Chrome, Safari, Opera */
+}
+
+.config-content h3 {
+  margin: 0 0 20px 0;
+  font-size: 18px;
+  font-weight: 600;
+  text-align: center;
+}
+
+.config-content h4 {
+  margin: 0 0 12px 0;
+  font-size: 14px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.8);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  padding-bottom: 8px;
+}
+
+.config-section {
+  margin-bottom: 20px;
+}
+
+.config-item {
+  margin-bottom: 12px;
+}
+
+.config-item label {
+  display: block;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.6);
+  margin-bottom: 4px;
+}
+
+.config-item input {
+  width: 100%;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  color: white;
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.config-item input:focus {
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+.config-item input::placeholder {
+  color: rgba(255, 255, 255, 0.3);
+}
+
+.config-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 20px;
+}
+
+.config-actions button {
+  padding: 8px 20px;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-secondary {
+  background: rgba(255, 255, 255, 0.1);
+  color: white;
+}
+
+.btn-secondary:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.btn-primary {
+  background: #4CAF50;
+  color: white;
+}
+
+.btn-primary:hover {
+  background: #45a049;
+}
+
+.btn-reset {
+  width: 100%;
+  padding: 10px 16px;
+  background: rgba(255, 107, 107, 0.2);
+  border: 1px solid rgba(255, 107, 107, 0.5);
+  border-radius: 6px;
+  color: #ff6b6b;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-reset:hover {
+  background: rgba(255, 107, 107, 0.3);
+  border-color: rgba(255, 107, 107, 0.7);
 }
 
 /* 动作测试面板 */
